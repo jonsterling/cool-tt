@@ -176,8 +176,12 @@ let rec pp env fmt tm =
       (pp_atomic env) bdy
   | Var ix ->
     pp_var env fmt ix
-  | Global sym ->
+  | Global (sym, []) ->
     Symbol.pp fmt sym
+  | Global (sym, args) ->
+    Format.fprintf fmt "%a %a"
+      Symbol.pp sym
+      (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt " ") (pp_atomic env)) args
   | Cof (Cof.Eq (r, s)) ->
     Format.fprintf fmt "%a = %a" (pp_atomic env) r (pp_atomic env) s
   | Cof (Cof.Join []) ->
@@ -485,45 +489,3 @@ and pp_lambdas env fmt tm =
     Format.fprintf fmt "=>@ @[%a@]"
       (pp env) tm
 
-
-
-let pp_sequent_goal env fmt tp  =
-  match tp with
-  | GoalTp (olbl, Sub (tp, Cof (Cof.Join []), _)) ->
-    let lbl = match olbl with Some lbl -> lbl | None -> "" in
-    Format.fprintf fmt "?%a : @[<hov>%a@]"
-      Uuseg_string.pp_utf_8 lbl
-      (pp_tp env) tp
-  | GoalTp (olbl, Sub (tp, phi, tm)) ->
-    let lbl = match olbl with Some lbl -> lbl | None -> "" in
-    let _x, envx = Pp.Env.bind env (Some "_") in
-    Format.fprintf fmt "@[?%a : @[<hv>%a@ [%a => %a]@]"
-      Uuseg_string.pp_utf_8 lbl
-      (pp_tp env) tp
-      (pp env) phi
-      (pp envx) tm
-  | GoalTp (olbl, tp) ->
-    let lbl = match olbl with Some lbl -> lbl | None -> "" in
-    Format.fprintf fmt "?%a : @[<hov>%a@]"
-      Uuseg_string.pp_utf_8 lbl
-      (pp_tp env) tp
-  | tp ->
-    pp_tp env fmt tp
-
-let rec pp_sequent_inner env fmt tp =
-  match tp with
-  | Pi (base, ident, fam) ->
-    let x, envx = ppenv_bind env ident in
-    Fmt.fprintf fmt "%a : %a@;%a"
-      Uuseg_string.pp_utf_8 x
-      (pp_tp env) base
-      (pp_sequent_inner envx) fam
-  | tp ->
-    Format.fprintf fmt "|- @[<hov>%a@]"
-      (pp_sequent_goal env)
-      tp
-
-let pp_sequent : tp Pp.printer =
-  fun fmt tp ->
-  Format.fprintf fmt "@[<v>%a@]"
-    (pp_sequent_inner Pp.Env.emp) tp

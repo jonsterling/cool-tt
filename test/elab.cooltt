@@ -45,3 +45,9 @@ def foo : (x : nat) → (y : nat) × path nat x y = {
   x =>
   [x, ?hole1]
 }
+
+print path
+
+-- def add (n : nat) : nat → nat by elim
+-- | zero => n
+-- | suc {m => ih/m} => suc ih/m

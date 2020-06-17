@@ -160,7 +160,7 @@ and con_to_dim =
     | D.Dim0 -> ret Dim.Dim0
     | D.Dim1 -> ret Dim.Dim1
     | D.Cut {cut = Var l, []; _} -> ret @@ Dim.DimVar l
-    | D.Cut {cut = Global sym, []; _} -> ret @@ Dim.DimSym sym
+    | D.Cut {cut = Global (sym, []), []; _} -> ret @@ Dim.DimSym sym
     | con ->
       Format.eprintf "bad: %a@." D.pp_con con;
       throw @@ NbeFailed "con_to_dim"
@@ -253,7 +253,7 @@ and push_subst_con : D.dim -> Symbol.t -> D.con -> D.con CM.m =
     and+ pivot = subst_con r x pivot
     and+ base = subst_con r x base in
     D.VIn (s, equiv, pivot, base)
-  | D.Cut {tp = _; cut = (D.Global y, [])} as con ->
+  | D.Cut {tp = _; cut = (D.Global (y, []), [])} as con ->
     begin
       test_sequent [] (Cof.eq (Dim.DimSym x) (Dim.DimSym y)) |>>
       function
@@ -385,7 +385,10 @@ and subst_hd : D.dim -> Symbol.t -> D.hd -> D.hd CM.m =
   fun r x ->
   let open CM in
   function
-  | D.Global _ | D.Var _ as hd -> ret hd
+  | D.Global (sym, args) ->
+    let+ args = MU.map (subst_con r x) args in
+    D.Global (sym, args)
+  | D.Var _ as hd -> ret hd
   | D.Coe (code, s, s', con) ->
     let+ code = subst_con r x code
     and+ s = subst_dim r x s
@@ -500,10 +503,12 @@ and eval : S.t -> D.con EvM.m =
     | S.Var i ->
       let* con = get_local i in
       lift_cmp @@ whnf_inspect_con ~style:`UnfoldNone con
-    | S.Global sym ->
+    | S.Global (sym, args) ->
       let* st = EvM.read_global in
-      let tp, _ = ElabState.get_global sym st in
-      ret @@ D.Cut {tp; cut = (D.Global sym, [])}
+      let decl = ElabState.get_global sym st in
+      let* args = MU.map eval args in
+      let* tp = lift_cmp @@ inst_decl_tp decl args in
+      ret @@ D.Cut {tp; cut = (D.Global (sym, args), [])}
     | S.Let (def, _, body) ->
       let* vdef = eval def in
       append [vdef] @@ eval body
@@ -822,17 +827,112 @@ and should_unfold_symbol style sym =
     | `Transparent -> true
     | `Translucent -> false
 
+and inst_decl ~style sym decl args : _ whnf CM.m =
+  let open CM in
+  let rec go env decl l_args r_args =
+    match decl, r_args with
+    | Decl.Hidden _, [] ->
+      ret `Done
+    | Decl.Return (_, tm), [] ->
+      let* con = lift_ev env @@ eval tm in
+      reduce_to ~style con
+    | Decl.Abs (_, _, decl), arg :: r_args ->
+      go D.{env with conenv = Snoc (env.conenv, arg)} decl (Snoc (l_args, arg)) r_args
+    | Decl.ByNatElim {mot; zero; suc}, [arg] ->
+      let* mot = lift_ev env @@ eval @@ S.Lam (`Anon, mot) in
+      let* zero = lift_ev env @@ eval zero in
+      let* suc = lift_ev env @@ eval suc in
+      let* self =
+        splice_tm @@
+        Splice.cons (Bwd.to_list l_args) @@ fun l_args ->
+        Splice.term @@
+        TB.lam @@ fun x ->
+        TB.global sym @@ l_args @ [x]
+      in
+      inst_nat_elim_decl ~style ~self ~mot ~zero ~suc arg
+    | _ ->
+      CM.throw @@ NbeFailed "inst_decl: mismatch"
+  in
+  go D.{tpenv = Emp; conenv = Emp} decl Emp args
+
+and inst_nat_elim_decl ~style ~self ~mot ~zero ~suc con : _ whnf CM.m =
+  let open CM in
+  abort_if_inconsistent (ret @@ `Reduce D.tm_abort) @@
+  begin
+    whnf_inspect_con ~style:`UnfoldNone con |>>
+    function
+    | D.Zero ->
+      reduce_to ~style zero
+    | D.Suc con' ->
+      let* ih = do_ap self con' in
+      reduce_to ~style @<< do_ap2 suc con' ih
+    | D.Cut _ ->
+      ret `Done
+    | D.FHCom (`Nat, r, s, phi, bdy) ->
+      reduce_to ~style @<<
+      splice_tm @@
+      Splice.con mot @@ fun mot ->
+      Splice.con self @@ fun self ->
+      Splice.dim r @@ fun r ->
+      Splice.dim s @@ fun s ->
+      Splice.cof phi @@ fun phi ->
+      Splice.con bdy @@ fun bdy ->
+      Splice.term @@
+      let fam =
+        TB.lam @@ fun i ->
+        let fhcom =
+          TB.el_out @@
+          TB.hcom TB.code_nat r i phi @@
+          TB.lam @@ fun j ->
+          TB.lam @@ fun prf ->
+          TB.el_in @@ TB.ap bdy [j; prf]
+        in
+        TB.ap mot [fhcom]
+      in
+      let bdy' =
+        TB.lam @@ fun i ->
+        TB.lam @@ fun prf ->
+        TB.ap self [TB.ap bdy [i; prf]]
+      in
+      TB.com fam r s phi bdy'
+    | D.Split branches as con ->
+      reduce_to ~style @<<
+      splice_tm @@
+      Splice.con self @@ fun self ->
+      Splice.Macro.commute_split con (List.map fst branches) @@ fun arg ->
+      TB.ap self [arg]
+    | con ->
+      Format.eprintf "bad nat-elim: %a@." D.pp_con con;
+      CM.throw @@ NbeFailed "Not a number"
+  end
+
+and inst_decl_tp decl (args : D.con list) =
+  let open CM in
+  let rec go env decl args =
+    match decl, args with
+    | Decl.Hidden ttp, [] ->
+      lift_ev env @@ eval_tp ttp
+    | Decl.Return (ttp, _), [] ->
+      lift_ev env @@ eval_tp ttp
+    | Decl.Abs (_, _, decl), arg :: args ->
+      go D.{env with conenv = Snoc (env.conenv, arg)} decl args
+    | _ ->
+      CM.throw @@ NbeFailed "inst_decl: mismatch"
+  in
+  go D.{tpenv = Emp; conenv = Emp} decl args
+
 and whnf_hd ~style hd =
   let open CM in
   match hd with
-  | D.Global sym ->
+  | D.Global (sym, args) ->
+    let exception Hidden in
     if should_unfold_symbol style sym then
       let* st = CM.read_global in
       begin
         match ElabState.get_global sym st with
-        | _tp, Some con ->
-          reduce_to ~style con
-        | _, None | exception _ ->
+        | decl ->
+          inst_decl ~style sym decl args
+        | exception _ ->
           ret `Done
       end
     else
@@ -926,10 +1026,10 @@ and whnf_tp_ ~style tp =
   | `Done -> ret tp
   | `Reduce tp -> ret tp
 
-and do_nat_elim (mot : D.con) zero (suc : D.con) : D.con -> D.con CM.m =
+and do_nat_elim (mot : D.con) (zero : D.con) (suc : D.con) : D.con -> D.con CM.m =
   let open CM in
 
-  let rec go con =
+  let rec go con : D.con CM.m =
     whnf_inspect_con ~style:`UnfoldNone con |>>
     function
     | D.Zero ->
@@ -1051,7 +1151,7 @@ and inst_tm_clo : D.tm_clo -> D.con -> D.con CM.m =
     eval bdy
 
 (* reduces a constructor to something that is stable to pattern match on *)
-and whnf_inspect_con ~style con =
+and whnf_inspect_con ~style (con : D.con) : D.con CM.m =
   let open CM in
   whnf_con ~style con |>>
   function
@@ -1131,7 +1231,7 @@ and do_snd con : D.con CM.m =
   end
 
 
-and do_ap2 f a b =
+and do_ap2 (f : D.con) (a : D.con) (b : D.con) : D.con CM.m =
   let open CM in
   let* fa = do_ap f a in
   do_ap fa b
