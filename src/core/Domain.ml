@@ -151,6 +151,14 @@ and pp_con : con Pp.printer =
     Format.fprintf fmt "dim0"
   | Dim1 ->
     Format.fprintf fmt "dim1"
+  | DDim0 ->
+    Format.fprintf fmt "ddim0"
+  | DDim1 ->
+    Format.fprintf fmt "ddim1"
+  | DMeet (con0, con1) ->
+    Format.fprintf fmt "dmeet[%a,%a]" pp_con con0 pp_con con1
+  | DJoin (con0, con1) ->
+    Format.fprintf fmt "djoin[%a,%a]" pp_con con0 pp_con con1
   | ElIn con ->
     Format.fprintf fmt "el/in[%a]" pp_con con
   | StableCode `Nat ->
@@ -192,6 +200,8 @@ and pp_tp fmt =
     Format.fprintf fmt "<cof>"
   | TpDim ->
     Format.fprintf fmt "<dim>"
+  | TpDDim ->
+    Format.fprintf fmt "<ddim>"
   | Univ ->
     Format.fprintf fmt "<univ>"
   | Nat ->
