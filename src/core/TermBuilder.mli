@@ -19,6 +19,7 @@ val lvl : int -> t m
 val tplvl : int -> tp m
 
 val lam : ?ident:Ident.t -> t b -> t m
+val nlam : int -> (t m list -> t m) -> t m
 val ap : t m -> t m list -> t m
 val coe : t m -> t m -> t m -> t m -> t m
 val hcom : t m -> t m -> t m -> t m -> t m -> t m
@@ -49,14 +50,16 @@ val sub_in : t m -> t m
 val el_in : t m -> t m
 val el_out : t m -> t m
 
-val univ : tp m
+val univ : t m -> tp m
 val nat : tp m
-val code_nat : t m
+val code_nat : t m -> t m
 val nat_elim : t m -> t m -> t m -> t m -> t m
 
 val circle : tp m
-val code_circle : t m
+val code_circle : t m -> t m
 val circle_elim : t m -> t m -> t m -> t m -> t m
+
+val lift_code : t m -> t m -> t m -> t m
 
 val pi : ?ident:Ident.t -> tp m -> tp b -> tp m
 val sg : ?ident:Ident.t -> tp m -> tp b -> tp m
@@ -72,10 +75,10 @@ val locked_prf_unlock : tp m -> cof:t m -> prf:t m -> bdy:t m -> t m
 
 val cube : int -> (t m list -> tp m) -> tp m
 
-val code_pi : t m -> t m -> t m
-val code_sg : t m -> t m -> t m
-val code_path : t m -> t m -> t m
-val code_v : t m -> t m -> t m -> t m -> t m
+val code_pi : t m -> t m -> t m -> t m
+val code_sg : t m -> t m -> t m -> t m
+val code_path : t m -> t m -> t m -> t m
+val code_v : t m -> t m -> t m -> t m -> t m -> t m
 val vproj : t m -> t m -> t m -> t m -> t m -> t m
 
 val dim0 : t m
@@ -86,6 +89,8 @@ val meet : t m list -> t m
 val boundary : t m -> t m
 val forall : t b -> t m
 
+val lvl_top : t m
+val lvl_magic : t m
 
 module Equiv : sig
   val code_is_contr : t m -> t m

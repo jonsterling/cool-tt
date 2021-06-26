@@ -9,6 +9,7 @@ module D := Domain
 val eval : S.t -> D.con evaluate
 val eval_cof : S.t -> D.cof evaluate
 val eval_tp : S.tp -> D.tp evaluate
+val eval_lvl : S.t -> ULvl.t evaluate
 
 type whnf_style = [`UnfoldNone | `UnfoldAll | `Veil of Veil.t]
 
@@ -36,6 +37,7 @@ val do_el : D.con -> D.tp compute
 val do_spine : D.con -> D.frm list -> D.con compute
 
 val con_to_dim : D.con -> D.dim compute
+val con_to_lvl : D.con -> ULvl.t compute
 val con_to_cof : D.con -> D.cof compute
 val cof_con_to_cof : (D.con, D.con) Cof.cof_f -> D.cof compute
 

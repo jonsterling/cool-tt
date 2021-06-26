@@ -30,7 +30,7 @@
 %token <string> ATOM
 %token <string option> HOLE_NAME
 %token LOCKED UNLOCK
-%token BANG COLON COLON_EQUALS PIPE COMMA DOT SEMI RIGHT_ARROW RRIGHT_ARROW UNDERSCORE DIM COF BOUNDARY
+%token BANG COLON COLON_EQUALS PIPE COMMA DOT SEMI RIGHT_ARROW RRIGHT_ARROW UNDERSCORE DIM COF BOUNDARY LVL
 %token LPR RPR LBR RBR LSQ RSQ
 %token EQUALS JOIN MEET
 %token TYPE
@@ -225,12 +225,12 @@ plain_atomic_term_except_name:
     { Base }
   | CIRCLE
     { Circle }
-  | TYPE
-    { Type }
   | name = HOLE_NAME
     { Hole (name, None) }
   | DIM
     { Dim }
+  | LVL
+    { Lvl }
   | COF
     { Cof }
   | TOPC
@@ -294,6 +294,8 @@ plain_term_except_cof_case:
     { Ann {term = t; tp} }
   | LOCKED; phi = atomic_term
     { Locked phi }
+  | TYPE; c = atomic_term
+    { Type c }
   | SUC; t = term
     { Suc t }
   | LOOP; t = term

@@ -43,6 +43,7 @@ let keywords =
     ("type", TYPE);
     ("𝕀", DIM);
     ("dim", DIM);
+    ("lvl", LVL);
     ("𝔽", COF);
     ("cof", COF);
     ("sub", SUB);

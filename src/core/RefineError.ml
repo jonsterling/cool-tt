@@ -14,6 +14,8 @@ let pp_connective fmt =
     Format.fprintf fmt "cof"
   | `Dim ->
     Format.fprintf fmt "dim"
+  | `Lvl ->
+    Format.fprintf fmt "lvl"
   | `Pi ->
     Format.fprintf fmt "pi"
   | `Sg ->
@@ -57,6 +59,16 @@ let pp fmt =
       "Head connective mismatch, expected %a but got %a"
       pp_connective conn
       (S.pp_tp ppenv) tp
+  | ExpectedLessThanOrEqualTo (ppenv, l0, l1) ->
+    Format.fprintf fmt
+      "Expected %a <= %a"
+      (S.pp ppenv) l0
+      (S.pp ppenv) l1
+  | ExpectedLessThan (ppenv, l0, l1) ->
+    Format.fprintf fmt
+      "Expected %a < %a"
+      (S.pp ppenv) l0
+      (S.pp ppenv) l1
   | ExpectedDimensionLiteral n ->
     Fmt.fprintf fmt
       "Expected dimension literal 0 or 1, but got %i" n

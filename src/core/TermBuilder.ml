@@ -173,14 +173,16 @@ let sub_in mtm =
   let+ tm = mtm in
   S.SubIn tm
 
-let univ : _ m =
-  ret S.Univ
+let univ mlvl : _ m =
+  let+ lvl = mlvl in
+  S.Univ lvl
 
 let nat : _ m =
   ret S.Nat
 
-let code_nat =
-  ret S.CodeNat
+let code_nat mlvl =
+  let+ lvl = mlvl in
+  S.CodeNat lvl
 
 let nat_elim mmot mzero msuc mscrut =
   let+ mot = mmot
@@ -189,6 +191,11 @@ let nat_elim mmot mzero msuc mscrut =
   and+ scrut = mscrut in
   S.NatElim (mot, zero, suc, scrut)
 
+let lift_code ml0 ml1 mcode =
+  let+ l0 = ml0
+  and+ l1 = ml1
+  and+ code = mcode in
+  S.CodeLift (l0, l1, code)
 
 let zero =
   ret S.Zero
@@ -200,8 +207,9 @@ let suc m =
 let circle : _ m =
   ret S.Circle
 
-let code_circle =
-  ret S.CodeCircle
+let code_circle mlvl =
+  let+ lvl = mlvl in
+  S.CodeCircle lvl
 
 let circle_elim mmot mbase mloop mscrut =
   let+ mot = mmot
@@ -227,27 +235,31 @@ let sg ?(ident = `Anon) mbase mfam : _ m =
   and+ fam = scope mfam in
   S.Sg (base, ident, fam)
 
-let code_pi mbase mfam : _ m =
-  let+ base = mbase
+let code_pi mlvl mbase mfam : _ m =
+  let+ lvl = mlvl
+  and+ base = mbase
   and+ fam = mfam in
-  S.CodePi (base, fam)
+  S.CodePi (lvl, base, fam)
 
-let code_sg mbase mfam : _ m =
-  let+ base = mbase
+let code_sg mlvl mbase mfam : _ m =
+  let+ lvl = mlvl
+  and+ base = mbase
   and+ fam = mfam in
-  S.CodeSg (base, fam)
+  S.CodeSg (lvl, base, fam)
 
-let code_path mfam mbdry : _ m =
-  let+ fam = mfam
+let code_path mlvl mfam mbdry : _ m =
+  let+ lvl = mlvl
+  and+ fam = mfam
   and+ bdry = mbdry in
-  S.CodeExt (1, fam, `Global (S.Lam (`Anon, S.Cof (Cof.Join [S.Cof (Cof.Eq (S.Var 0, S.Dim0)); S.Cof (Cof.Eq (S.Var 0, S.Dim1))]))), bdry)
+  S.CodeExt (lvl, 1, fam, `Global (S.Lam (`Anon, S.Cof (Cof.Join [S.Cof (Cof.Eq (S.Var 0, S.Dim0)); S.Cof (Cof.Eq (S.Var 0, S.Dim1))]))), bdry)
 
-let code_v mr mpcode mcode mpequiv : _ m=
-  let+ r = mr
+let code_v mlvl mr mpcode mcode mpequiv : _ m=
+  let+ lvl = mlvl
+  and+ r = mr
   and+ pcode = mpcode
   and+ code = mcode
   and+ pequiv = mpequiv in
-  S.CodeV (r, pcode, code, pequiv)
+  S.CodeV (lvl, r, pcode, code, pequiv)
 
 let sub mbase mphi mbdry =
   let+ base = mbase
@@ -288,6 +300,8 @@ let tp_dim = ret S.TpDim
 let tp_cof = ret S.TpCof
 let dim0 = ret S.Dim0
 let dim1 = ret S.Dim1
+let lvl_magic = ret S.LvlMagic
+let lvl_top = ret S.LvlTop
 
 let cube n mfam : _ m =
   let rec go acc n =
@@ -344,8 +358,8 @@ let vproj mr mpcode mcode mpequiv mv =
   and+ v = mv in
   S.VProj (r, pcode, code, pequiv, v)
 
-let code_path' mfam ml mr : _ m =
-  code_path mfam @@ lam @@ fun i ->
+let code_path' mlvl mfam ml mr : _ m =
+  code_path mlvl mfam @@ lam @@ fun i ->
   lam @@ fun _ ->
   cof_split
     [eq i dim0, ml;
@@ -362,17 +376,17 @@ module Equiv : sig
 end =
 struct
   let code_is_contr code =
-    code_sg code @@ lam @@ fun x ->
-    code_pi code @@ lam @@ fun y ->
-    code_path' (lam @@ fun _ -> code) x y
+    code_sg lvl_top code @@ lam @@ fun x ->
+    code_pi lvl_top code @@ lam @@ fun y ->
+    code_path' lvl_top (lam @@ fun _ -> code) x y
 
   let code_fiber code_a code_b f b =
-    code_sg code_a @@ lam @@ fun a ->
-    code_path' (lam @@ fun _ -> code_b) (ap f [a]) b
+    code_sg lvl_top code_a @@ lam @@ fun a ->
+    code_path' lvl_top (lam @@ fun _ -> code_b) (ap f [a]) b
 
   let code_equiv code_a code_b =
-    code_sg (code_pi code_a @@ lam @@ fun _ -> code_b) @@ lam @@ fun f ->
-    code_pi code_b @@ lam @@ fun y ->
+    code_sg lvl_top (code_pi lvl_top code_a @@ lam @@ fun _ -> code_b) @@ lam @@ fun f ->
+    code_pi lvl_top code_b @@ lam @@ fun y ->
     code_is_contr @@ code_fiber code_a code_b (el_out f) y
 
   let equiv_fwd equiv =
@@ -525,8 +539,10 @@ struct
       @@ fun fibercode ->
       let_ ~ident:(`Machine "R")
         begin
-          let line = lam ~ident:(`Machine "i") @@ fun i ->
-            code_path' (lam @@ fun _ -> code_ i)
+          let line =
+            lam ~ident:(`Machine "i") @@ fun i ->
+            code_path' lvl_top
+              (lam @@ fun _ -> code_ i)
               (ap f_tilde [i; prf; coe (lam @@ fun j -> ap (pcode_ j) [prf]) r i bdy])
               (coe (lam code_) r i (ap f_tilde [r; prf; bdy]))
           in

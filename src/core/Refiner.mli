@@ -7,7 +7,7 @@ module RM := Monads.RefineM
 
 open Tactic
 
-type ('a, 'b) quantifier = 'a -> Ident.t * (var -> 'b) -> 'b
+type ('a, 'b) quantifier = 'a -> Ident.t -> (var -> 'b) -> 'b
 
 module Hole : sig
   val unleash_hole : string option -> Chk.tac
@@ -24,6 +24,11 @@ module Dim : sig
   val dim0 : Chk.tac
   val dim1 : Chk.tac
   val literal : int -> Chk.tac
+end
+
+module Lvl : sig
+  val formation : Tp.tac
+  val top : Chk.tac
 end
 
 module Cof : sig
@@ -49,8 +54,9 @@ module LockedPrf : sig
 end
 
 module Univ : sig
-  val formation : Tp.tac
-  val univ : Chk.tac
+  val formation : Chk.tac -> Tp.tac
+  val univ : Chk.tac -> Chk.tac
+  val lift : Syn.tac -> Chk.tac
   val nat : Chk.tac
   val circle : Chk.tac
   val pi : Chk.tac -> Chk.tac -> Chk.tac

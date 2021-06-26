@@ -150,14 +150,14 @@ let rec quote_con (tp : D.tp) con =
       TB.lam @@ fun i -> TB.lam @@ fun prf ->
       TB.el_in @@ TB.ap bdy [i; prf]
     in
-    let+ tm = quote_hcom (D.StableCode `Nat) r s phi bdy' in
+    let+ tm = quote_hcom (D.StableCode (`Nat ULvl.LvlTop)) r s phi bdy' in
     S.ElOut tm
 
-  | _univ, D.UnstableCode (`V (r, pcode, code, pequiv)) ->
-    let+ tr, t_pcode, tcode, t_pequiv = quote_v_data r pcode code pequiv in
-    S.CodeV (tr, t_pcode, tcode, t_pequiv)
+  | D.Univ _, D.UnstableCode (`V (lvl, r, pcode, code, pequiv)) ->
+    let+ tlvl, tr, t_pcode, tcode, t_pequiv = quote_v_data lvl r pcode code pequiv in
+    S.CodeV (tlvl, tr, t_pcode, tcode, t_pequiv)
 
-  | _univ, D.UnstableCode (`HCom (r, s, phi, bdy)) ->
+  | D.Univ lvl, D.UnstableCode (`HCom (_, r, s, phi, bdy)) ->
     (* bdy : (i : 𝕀) (_ : [...]) → nat *)
     let* bdy' =
       lift_cmp @@ splice_tm @@
@@ -166,7 +166,7 @@ let rec quote_con (tp : D.tp) con =
       TB.lam @@ fun i -> TB.lam @@ fun prf ->
       TB.el_in @@ TB.ap bdy [i; prf]
     in
-    let+ tm = quote_hcom (D.StableCode `Univ) r s phi bdy' in
+    let+ tm = quote_hcom (D.StableCode (`Univ (lvl, ULvl.LvlTop))) r s phi bdy' in
     S.ElOut tm
 
   | D.Circle, D.FHCom (`Circle, r, s, phi, bdy) ->
@@ -177,10 +177,10 @@ let rec quote_con (tp : D.tp) con =
       TB.lam @@ fun i -> TB.lam @@ fun prf ->
       TB.el_in @@ TB.ap bdy [i; prf]
     in
-    let+ tm = quote_hcom (D.StableCode `Circle) r s phi bdy' in
+    let+ tm = quote_hcom (D.StableCode (`Circle ULvl.LvlTop)) r s phi bdy' in
     S.ElOut tm
 
-  | D.ElUnstable (`HCom (r,s,phi,bdy)), _ ->
+  | D.ElUnstable (`HCom (_lvl, r,s,phi,bdy)), _ ->
     let+ tr = quote_dim r
     and+ ts = quote_dim s
     and+ tphi = quote_cof phi
@@ -194,7 +194,7 @@ let rec quote_con (tp : D.tp) con =
     in
     S.Box (tr, ts, tphi, tsides, tcap)
 
-  | D.ElUnstable (`V (r, pcode, code, pequiv)) as tp, _ ->
+  | D.ElUnstable (`V (_lvl, r, pcode, code, pequiv)) as tp, _ ->
     begin
       lift_cmp (CmpM.test_sequent [] (Cof.boundary ~dim0:Dim.Dim0 ~dim1:Dim.Dim1 r)) |>> function
       | true ->
@@ -267,43 +267,58 @@ let rec quote_con (tp : D.tp) con =
     Format.eprintf "bad: %a / %a@." D.pp_tp tp D.pp_con con;
     throw @@ QuotationError (Error.IllTypedQuotationProblem (tp, con))
 
+and quote_lvl =
+  function
+  | ULvl.LvlVar l ->
+    let+ i = quote_var l in
+    S.Var i
+  | ULvl.LvlMagic -> ret S.LvlMagic
+  | ULvl.LvlTop -> ret S.LvlTop
+
 and quote_stable_code univ =
   function
-  | `Nat ->
-    ret S.CodeNat
+  | `Nat lvl ->
+    let+ tlvl = quote_lvl lvl in
+    S.CodeNat tlvl
 
-  | `Circle ->
-    ret S.CodeCircle
+  | `Circle lvl ->
+    let+ tlvl = quote_lvl lvl in
+    S.CodeCircle tlvl
 
-  | `Univ ->
-    ret S.CodeUniv
+  | `Univ (lvl, lvl') ->
+    let+ tlvl = quote_lvl lvl
+    and+ tlvl' = quote_lvl lvl' in
+    S.CodeUniv (tlvl, tlvl')
 
-  | `Pi (base, fam) ->
-    let+ tbase = quote_con univ base
+  | `Pi (lvl, base, fam) ->
+    let+ tlvl = quote_lvl lvl
+    and+ tbase = quote_con univ base
     and+ tfam =
       let* elbase = lift_cmp @@ do_el base in
       quote_lam elbase @@ fun var ->
       quote_con univ @<<
       lift_cmp @@ do_ap fam var
     in
-    S.CodePi (tbase, tfam)
+    S.CodePi (tlvl, tbase, tfam)
 
-  | `Sg (base, fam) ->
-    let+ tbase = quote_con univ base
+  | `Sg (lvl, base, fam) ->
+    let+ tlvl = quote_lvl lvl
+    and+ tbase = quote_con univ base
     and+ tfam =
       let* elbase = lift_cmp @@ do_el base in
       quote_lam elbase @@ fun var ->
       quote_con univ @<<
       lift_cmp @@ do_ap fam var
     in
-    S.CodeSg (tbase, tfam)
+    S.CodeSg (tlvl, tbase, tfam)
 
-  | `Ext (n, code, `Global phi, bdry) ->
-    let+ tphi =
+  | `Ext (lvl, n, code, `Global phi, bdry) ->
+    let+ tlvl = quote_lvl lvl
+    and+ tphi =
       let* tp_cof_fam = lift_cmp @@ splice_tp @@ Splice.term @@ TB.cube n @@ fun _ -> TB.tp_cof in
       quote_global_con tp_cof_fam @@ `Global phi
     and+ tcode =
-      let* tp_code = lift_cmp @@ splice_tp @@ Splice.term @@ TB.cube n @@ fun _ -> TB.univ in
+      let* tp_code = lift_cmp @@ splice_tp @@ Splice.tp (D.Univ lvl) @@ fun univ -> Splice.term @@ TB.cube n @@ fun _ -> univ in
       quote_con tp_code code
     and+ tbdry =
       let* tp_bdry =
@@ -317,7 +332,7 @@ and quote_stable_code univ =
       in
       quote_con tp_bdry bdry
     in
-    S.CodeExt (n, tcode, tphi, tbdry)
+    S.CodeExt (tlvl, n, tcode, tphi, tbdry)
 
 and quote_global_con tp (`Global con) =
   globally @@
@@ -328,10 +343,11 @@ and quote_lam ?(ident = `Anon) tp mbdy =
   let+ bdy = bind_var tp mbdy in
   S.Lam (ident, bdy)
 
-and quote_v_data r pcode code pequiv =
-  let+ tr = quote_dim r
-  and+ t_pcode = quote_con (D.Pi (D.TpPrf (Cof.eq r Dim.Dim0), `Anon, D.const_tp_clo D.Univ)) pcode
-  and+ tcode = quote_con D.Univ code
+and quote_v_data lvl r pcode code pequiv =
+  let+ tlvl = quote_lvl lvl
+  and+ tr = quote_dim r
+  and+ t_pcode = quote_con (D.Pi (D.TpPrf (Cof.eq r Dim.Dim0), `Anon, D.const_tp_clo (D.Univ lvl))) pcode
+  and+ tcode = quote_con (D.Univ lvl) code
   and+ t_pequiv =
     let* tp_pequiv =
       lift_cmp @@ Sem.splice_tp @@
@@ -339,11 +355,11 @@ and quote_v_data r pcode code pequiv =
     in
     quote_con tp_pequiv pequiv
   in
-  tr, t_pcode, tcode, t_pequiv
+  tlvl, tr, t_pcode, tcode, t_pequiv
 
 
 and quote_hcom code r s phi bdy =
-  let* tcode = quote_con D.Univ code in
+  let* tcode = quote_con (D.Univ ULvl.LvlTop) code in
   let* tr = quote_dim r in
   let* ts = quote_dim s in
   let* tphi = quote_cof phi in
@@ -376,10 +392,11 @@ and quote_tp (tp : D.tp) =
     let* tbase = quote_tp base in
     let+ tfam = quote_tp_clo base fam in
     S.Sg (tbase, ident, tfam)
-  | D.Univ ->
-    ret S.Univ
+  | D.Univ lvl ->
+    let+ tlvl = quote_lvl lvl in
+    S.Univ tlvl
   | D.ElStable code ->
-    let+ tm = quote_stable_code D.Univ code in
+    let+ tm = quote_stable_code (D.Univ ULvl.LvlTop) code in
     S.El tm
   | D.ElCut cut ->
     let+ tm = quote_cut cut in
@@ -395,13 +412,16 @@ and quote_tp (tp : D.tp) =
     S.Sub (ttp, tphi, tm)
   | D.TpDim ->
     ret S.TpDim
+  | D.TpLvl ->
+    ret S.TpLvl
   | D.TpCof ->
     ret S.TpCof
   | D.TpPrf phi ->
     let+ tphi = quote_cof phi in
     S.TpPrf tphi
-  | D.ElUnstable (`HCom (r, s, phi, bdy)) ->
-    let+ tr = quote_dim r
+  | D.ElUnstable (`HCom (lvl, r, s, phi, bdy)) ->
+    let+ tlvl = quote_lvl lvl
+    and+ tr = quote_dim r
     and+ ts = quote_dim s
     and+ tphi = quote_cof phi
     and+ tbdy =
@@ -410,17 +430,18 @@ and quote_tp (tp : D.tp) =
         Sem.splice_tp @@
         Splice.dim r @@ fun r ->
         Splice.cof phi @@ fun phi ->
+        Splice.tp (D.Univ lvl) @@ fun univ ->
         Splice.term @@
         TB.pi TB.tp_dim @@ fun i ->
         TB.pi (TB.tp_prf (TB.join [TB.eq i r; phi])) @@ fun _prf ->
-        TB.univ
+        univ
       in
       quote_con tp_bdy bdy
     in
-    S.El (S.HCom (S.CodeUniv, tr, ts, tphi, tbdy))
-  | D.ElUnstable (`V (r, pcode, code, pequiv)) ->
-    let+ tr, t_pcode, tcode, t_pequiv = quote_v_data r pcode code pequiv in
-    S.El (S.CodeV (tr, t_pcode, tcode, t_pequiv))
+    S.El (S.HCom (S.CodeUniv (tlvl, S.LvlTop), tr, ts, tphi, tbdy))
+  | D.ElUnstable (`V (lvl, r, pcode, code, pequiv)) ->
+    let+ tlvl, tr, t_pcode, tcode, t_pequiv = quote_v_data lvl r pcode code pequiv in
+    S.El (S.CodeV (tlvl, tr, t_pcode, tcode, t_pequiv))
   | D.TpSplit branches ->
     let branch_body (phi, clo) : S.tp m =
       QuM.bind_var (D.TpPrf phi) @@ fun prf ->
@@ -442,7 +463,7 @@ and quote_hd =
   | D.Global sym ->
     ret @@ S.Global sym
   | D.Coe (code, r, s, con) ->
-    let code_tp = D.Pi (D.TpDim, `Anon, D.const_tp_clo D.Univ) in
+    let code_tp = D.Pi (D.TpDim, `Anon, D.const_tp_clo (D.Univ ULvl.LvlTop)) in
     let* tpcode = quote_con code_tp code in
     let* tr = quote_dim r in
     let* ts = quote_dim s in
@@ -456,12 +477,12 @@ and quote_hd =
 and quote_unstable_cut cut ufrm =
   match ufrm with
   | D.KHCom (r, s, phi, bdy) ->
-    let code = D.Cut {cut; tp = D.Univ} in
+    let code = D.Cut {cut; tp = D.Univ ULvl.LvlTop} in
     quote_hcom code r s phi bdy
   | D.KSubOut _ ->
     let+ tm = quote_cut cut in
     S.SubOut tm
-  | D.KCap (r, s, phi, code) ->
+  | D.KCap (_lvl, r, s, phi, code) ->
     let* tr = quote_dim r in
     let* ts = quote_dim s in
     let* tphi = quote_cof phi in
@@ -473,15 +494,15 @@ and quote_unstable_cut cut ufrm =
       Splice.term @@
       TB.pi TB.tp_dim @@ fun i ->
       TB.pi (TB.tp_prf (TB.join [TB.eq i r; phi])) @@ fun _prf ->
-      TB.univ
+      TB.univ TB.lvl_magic
     in
     let+ tcode = quote_con code_tp code
     and+ tbox = quote_cut cut in
     S.Cap (tr, ts, tphi, tcode, tbox)
-  | D.KVProj (r, pcode, code, pequiv) ->
+  | D.KVProj (lvl, r, pcode, code, pequiv) ->
     let* tr = quote_dim r in
-    let* tpcode = quote_con (D.Pi (D.TpPrf (Cof.eq r Dim.Dim0), `Anon, D.const_tp_clo D.Univ)) pcode in
-    let* tcode = quote_con D.Univ code in
+    let* tpcode = quote_con (D.Pi (D.TpPrf (Cof.eq r Dim.Dim0), `Anon, D.const_tp_clo (D.Univ lvl))) pcode in
+    let* tcode = quote_con (D.Univ lvl) code in
     let* t_pequiv =
       let* tp_pequiv =
         lift_cmp @@ Sem.splice_tp @@
@@ -546,7 +567,7 @@ and quote_frm tm =
   | D.KNatElim (mot, zero_case, suc_case) ->
     let* mot_tp =
       lift_cmp @@ Sem.splice_tp @@ Splice.term @@
-      TB.pi TB.nat @@ fun _ -> TB.univ
+      TB.pi TB.nat @@ fun _ -> TB.univ TB.lvl_top
     in
     let* tmot = quote_con mot_tp mot in
     let* tzero_case =
@@ -567,7 +588,7 @@ and quote_frm tm =
   | D.KCircleElim (mot, base_case, loop_case) ->
     let* mot_tp =
       lift_cmp @@ Sem.splice_tp @@ Splice.term @@
-      TB.pi TB.circle @@ fun _ -> TB.univ
+      TB.pi TB.circle @@ fun _ -> TB.univ TB.lvl_top
     in
     let* tmot = quote_con mot_tp mot in
     let* tbase_case =
@@ -593,3 +614,7 @@ and quote_frm tm =
     S.Ap (tm, targ)
   | D.KElOut ->
     ret @@ S.ElOut tm
+  | D.KLift (l0, l1) ->
+    let+ tl0 = quote_lvl l0
+    and+ tl1 = quote_lvl l1 in
+    S.CodeLift (tl0, tl1, tm)

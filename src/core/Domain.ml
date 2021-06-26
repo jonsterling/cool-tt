@@ -1,6 +1,7 @@
 include DomainData
 open Basis
 open Cubical
+open Bwd
 
 module Make (Symbol : Symbol.S) =
 struct

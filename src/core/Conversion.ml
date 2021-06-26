@@ -17,6 +17,7 @@ module Error =
 struct
   type t =
     | ExpectedDimEq of D.dim * D.dim
+    | ExpectedLvlEq of ULvl.t * ULvl.t
     | ExpectedSequentTrue of D.cof list * D.cof
     | ExpectedTypeEq of D.tp * D.tp
     | ExpectedConEq of D.tp * D.con * D.con
@@ -29,6 +30,8 @@ struct
     function
     | ExpectedDimEq (r,s) ->
       Format.fprintf fmt "Expected %a = %a : dim" D.pp_dim r D.pp_dim s
+    | ExpectedLvlEq (l0,l1) ->
+      Format.fprintf fmt "Expected %a = %a : lvl" D.pp_lvl l0 D.pp_lvl l1
     | ExpectedSequentTrue (phis, psi) ->
       Format.fprintf fmt "Expected @[%a |- @[%a@]@] true" D.pp_cof (Cof.meet phis) D.pp_cof psi
     | ExpectedTypeEq (tp0, tp1) ->
@@ -63,6 +66,12 @@ let equate_dim r s =
   | false ->
     conv_err @@ ExpectedDimEq (r, s)
 
+let equate_lvl l0 l1 =
+  if ULvl.equal l0 l1 then
+    ret ()
+  else
+    conv_err @@ ExpectedLvlEq (l0, l1)
+
 let contractum_or x =
   function
   | `Done -> x
@@ -77,7 +86,7 @@ let rec equate_tp (tp0 : D.tp) (tp1 : D.tp) =
   | D.TpSplit branches, _
   | _, D.TpSplit branches ->
     MU.iter (fun (phi, _) -> ConvM.restrict_ [phi] @@ equate_tp tp0 tp1) branches
-  | D.TpDim, D.TpDim | D.TpCof, D.TpCof -> ret ()
+  | D.TpDim, D.TpDim | D.TpCof, D.TpCof | D.TpLvl, D.TpLvl -> ret ()
   | D.TpPrf phi0, D.TpPrf phi1 ->
     equate_cof phi0 phi1
   | D.TpLockedPrf phi0, D.TpLockedPrf phi1 ->
@@ -97,14 +106,14 @@ let rec equate_tp (tp0 : D.tp) (tp1 : D.tp) =
     let* con1 = lift_cmp @@ inst_tm_clo clo1 prf in
     equate_con tp0 con0 con1
   | D.Nat, D.Nat
-  | D.Circle, D.Circle
-  | D.Univ, D.Univ ->
+  | D.Circle, D.Circle -> ret ()
+  | D.Univ l, D.Univ k when ULvl.equal l k ->
     ret ()
   | D.ElStable code0, D.ElStable code1 ->
-    equate_stable_code D.Univ code0 code1
+    equate_stable_code (D.Univ ULvl.magic) code0 code1
   | D.ElCut cut0, D.ElCut cut1 ->
     equate_cut cut0 cut1
-  | D.ElUnstable (`HCom (r0, s0, phi0, bdy0)), D.ElUnstable (`HCom (r1, s1, phi1, bdy1)) ->
+  | D.ElUnstable (`HCom (lvl, r0, s0, phi0, bdy0)), D.ElUnstable (`HCom (_, r1, s1, phi1, bdy1)) ->
     let* () = equate_dim r0 r1 in
     let* () = equate_dim s0 s1 in
     let* () = equate_cof phi0 phi1 in
@@ -113,22 +122,24 @@ let rec equate_tp (tp0 : D.tp) (tp1 : D.tp) =
       Sem.splice_tp @@
       Splice.dim r0 @@ fun r ->
       Splice.cof phi0 @@ fun phi ->
+      Splice.tp (D.Univ lvl) @@ fun univ ->
       Splice.term @@
       TB.pi TB.tp_dim @@ fun i ->
       TB.pi (TB.tp_prf (TB.join [TB.eq i r; phi])) @@ fun _prf ->
-      TB.univ
+      univ
     in
     equate_con tp_bdy bdy0 bdy1
-  | D.ElUnstable (`V (r0, pcode0, code0, pequiv0)), D.ElUnstable (`V (r1, pcode1, code1, pequiv1)) ->
-    equate_v_data (r0, pcode0, code0, pequiv0) (r1, pcode1, code1, pequiv1)
+  | D.ElUnstable (`V (lvl, r0, pcode0, code0, pequiv0)), D.ElUnstable (`V (_, r1, pcode1, code1, pequiv1)) ->
+    equate_v_data lvl (r0, pcode0, code0, pequiv0) (r1, pcode1, code1, pequiv1)
   | _ ->
     conv_err @@ ExpectedTypeEq (tp0, tp1)
 
 and equate_stable_code univ code0 code1 =
   match code0, code1 with
-  | `Nat, `Nat | `Circle, `Circle | `Univ, `Univ -> ret ()
-  | `Pi (base0, fam0), `Pi (base1, fam1)
-  | `Sg (base0, fam0), `Sg (base1, fam1) ->
+  | `Nat _, `Nat _ | `Circle _, `Circle _ -> ret ()
+  | `Univ (x, _), `Univ (y, _) when ULvl.equal x y -> ret ()
+  | `Pi (_, base0, fam0), `Pi (_, base1, fam1)
+  | `Sg (_, base0, fam0), `Sg (_, base1, fam1) ->
     let* _ = equate_con univ base0 base1 in
     let* fam_tp =
       lift_cmp @@
@@ -139,13 +150,18 @@ and equate_stable_code univ code0 code1 =
     in
     equate_con fam_tp fam0 fam1
 
-  | `Ext (n0, code0, `Global phi0, bdry0), `Ext (n1, code1, `Global phi1, bdry1) when n0 = n1 ->
+  | `Ext (_, n0, code0, `Global phi0, bdry0), `Ext (_, n1, code1, `Global phi1, bdry1) when n0 = n1 ->
     let* () =
       let* tp_cof_fam = lift_cmp @@ splice_tp @@ Splice.term @@ TB.cube n0 @@ fun _ -> TB.tp_cof in
       globally @@ equate_con tp_cof_fam phi0 phi1
     in
     let* () =
-      let* tp_code = lift_cmp @@ splice_tp @@ Splice.term @@ TB.cube n0 @@ fun _ -> TB.univ in
+      let* tp_code =
+        lift_cmp @@
+        splice_tp @@
+        Splice.tp univ @@ fun univ ->
+        Splice.term @@ TB.cube n0 @@ fun _ -> univ
+      in
       equate_con tp_code code0 code1
     in
     let* tp_bdry =
@@ -206,6 +222,10 @@ and equate_con tp con0 con1 =
     ret ()
   | _, D.Loop r0, D.Loop r1 ->
     equate_dim r0 r1
+  | D.TpLvl, _, _ ->
+    let* l0 = lift_cmp @@ con_to_lvl con0 in
+    let* l1 = lift_cmp @@ con_to_lvl con1 in
+    equate_lvl l0 l1
   | D.TpDim, _, _ ->
     let* r0 = lift_cmp @@ con_to_dim con0 in
     let* r1 = lift_cmp @@ con_to_dim con1 in
@@ -226,7 +246,7 @@ and equate_con tp con0 con1 =
     in
     let* bdy0' = fix_body bdy0 in
     let* bdy1' = fix_body bdy1 in
-    equate_hcom (D.StableCode `Nat, r0, s0, phi0, bdy0') (D.StableCode `Nat, r1, s1, phi1, bdy1')
+    equate_hcom (D.StableCode (`Nat ULvl.LvlTop), r0, s0, phi0, bdy0') (D.StableCode (`Nat ULvl.LvlTop), r1, s1, phi1, bdy1')
   | _, D.FHCom (`Circle, r0, s0, phi0, bdy0), D.FHCom (`Circle, r1, s1, phi1, bdy1) ->
     let fix_body bdy =
       lift_cmp @@ splice_tm @@
@@ -237,16 +257,16 @@ and equate_con tp con0 con1 =
     in
     let* bdy0' = fix_body bdy0 in
     let* bdy1' = fix_body bdy1 in
-    equate_hcom (D.StableCode `Circle, r0, s0, phi0, bdy0') (D.StableCode `Circle, r1, s1, phi1, bdy1')
+    equate_hcom (D.StableCode (`Circle ULvl.LvlTop), r0, s0, phi0, bdy0') (D.StableCode (`Circle ULvl.LvlTop), r1, s1, phi1, bdy1')
 
   | univ, D.StableCode code0, D.StableCode code1 ->
     equate_stable_code univ code0 code1
 
-  | _, D.UnstableCode (`V (r0, pcode0, code0, pequiv0)), D.UnstableCode (`V (r1, pcode1, code1, pequiv1)) ->
-    equate_v_data (r0, pcode0, code0, pequiv0) (r1, pcode1, code1, pequiv1)
+  | _, D.UnstableCode (`V (lvl, r0, pcode0, code0, pequiv0)), D.UnstableCode (`V (_, r1, pcode1, code1, pequiv1)) ->
+    equate_v_data lvl (r0, pcode0, code0, pequiv0) (r1, pcode1, code1, pequiv1)
 
 
-  | D.ElUnstable (`HCom (r, s, phi, bdy)) as hcom_tp, _, _ ->
+  | D.ElUnstable (`HCom (_, r, s, phi, bdy)) as hcom_tp, _, _ ->
     let* cap0 = lift_cmp @@ Sem.do_rigid_cap r s phi bdy con0 in
     let* cap1 = lift_cmp @@ Sem.do_rigid_cap r s phi bdy con1 in
     let* code_cap = lift_cmp @@ Sem.do_ap2 bdy (D.dim_to_con r) D.Prf in
@@ -255,7 +275,7 @@ and equate_con tp con0 con1 =
     ConvM.restrict_ [phi] @@
     equate_con hcom_tp con0 con1
 
-  | D.ElUnstable (`V (r, pcode, code, pequiv)) as v_tp, _, _ ->
+  | D.ElUnstable (`V (_, r, pcode, code, pequiv)) as v_tp, _, _ ->
     let* () = ConvM.restrict_ [Cof.eq r Dim.Dim0] @@ equate_con v_tp con0 con1 in
     let* proj0 = lift_cmp @@ Sem.do_rigid_vproj r pcode code pequiv con0 in
     let* proj1 = lift_cmp @@ Sem.do_rigid_vproj r pcode code pequiv con1 in
@@ -291,25 +311,25 @@ and equate_cut cut0 cut1 =
 
 (* Invariant: sp0, sp1 are whnf *)
 and equate_spine sp0 sp1 =
-  let exception Mismatch in
   let rec go sp0 sp1 =
     match sp0, sp1 with
-    | [], [] -> ret ()
+    | [], [] -> ret `Ok
     | k0 :: sp0, k1 :: sp1 ->
       let* () = equate_frm k0 k1 in
       go sp0 sp1
     | _ ->
-      raise Mismatch
+      ret `Mismatch
   in
-  try go sp0 sp1 with
-  | Mismatch ->
-    conv_err @@ Error.SpineLengthMismatch (sp0, sp1)
+  go sp0 sp1 |>> function
+  | `Ok -> ret ()
+  | `Mismatch -> conv_err @@ Error.SpineLengthMismatch (sp0, sp1)
 
 (* Invariant: k0, k1 are whnf *)
 and equate_frm k0 k1 =
   match k0, k1 with
   | D.KFst, D.KFst
-  | D.KSnd, D.KSnd ->
+  | D.KSnd, D.KSnd
+  | D.KLift _, D.KLift _ ->
     ret ()
   | D.KAp (tp0, con0), D.KAp (tp1, con1) ->
     let* () = equate_tp tp0 tp1 in
@@ -317,7 +337,7 @@ and equate_frm k0 k1 =
   | D.KNatElim (mot0, zero_case0, suc_case0), D.KNatElim (mot1, zero_case1, suc_case1) ->
     let* mot_tp =
       lift_cmp @@ Sem.splice_tp @@ Splice.term @@
-      TB.pi TB.nat @@ fun _ -> TB.univ
+      TB.pi TB.nat @@ fun _ -> TB.univ TB.lvl_top
     in
     let* () = equate_con mot_tp mot0 mot1 in
     let* () =
@@ -337,7 +357,7 @@ and equate_frm k0 k1 =
   | D.KCircleElim (mot0, base_case0, loop_case0), D.KCircleElim (mot1, base_case1, loop_case1) ->
     let* mot_tp =
       lift_cmp @@ Sem.splice_tp @@ Splice.term @@
-      TB.pi TB.circle @@ fun _ -> TB.univ
+      TB.pi TB.circle @@ fun _ -> TB.univ TB.lvl_top
     in
     let* () = equate_con mot_tp mot0 mot1 in
     let* () =
@@ -385,7 +405,7 @@ and equate_hd hd0 hd1 =
       bind_var_ D.TpDim @@ fun i ->
       let* code0 = lift_cmp @@ do_ap abs0 i in
       let* code1 = lift_cmp @@ do_ap abs1 i in
-      equate_con D.Univ code0 code1
+      equate_con (D.Univ ULvl.LvlTop) code0 code1
     in
     let* code = lift_cmp @@ do_ap abs0 @@ D.dim_to_con r0 in
     let* tp_code = lift_cmp @@ do_el code in
@@ -398,12 +418,12 @@ and equate_hd hd0 hd1 =
 and equate_unstable_cut (cut0, ufrm0) (cut1, ufrm1) =
   match ufrm0, ufrm1 with
   | D.KHCom (r0, s0, phi0, bdy0), D.KHCom (r1, s1, phi1, bdy1) ->
-    let code0 = D.Cut {tp = D.Univ; cut = cut0} in
-    let code1 = D.Cut {tp = D.Univ; cut = cut1} in
+    let code0 = D.Cut {tp = D.Univ ULvl.magic; cut = cut0} in
+    let code1 = D.Cut {tp = D.Univ ULvl.magic; cut = cut1} in
     equate_hcom (code0, r0, s0, phi0, bdy0) (code1, r1, s1, phi1, bdy1)
   | D.KSubOut _, D.KSubOut _ ->
     equate_cut cut0 cut1
-  | D.KCap (r0, s0, phi0, code0), D.KCap (r1, s1, phi1, code1) ->
+  | D.KCap (lvl, r0, s0, phi0, code0), D.KCap (_, r1, s1, phi1, code1) ->
     let* () = equate_dim r0 r1 in
     let* () = equate_dim s0 s1 in
     let* () = equate_cof phi0 phi1 in
@@ -413,16 +433,17 @@ and equate_unstable_cut (cut0, ufrm0) (cut1, ufrm1) =
         Sem.splice_tp @@
         Splice.dim r0 @@ fun r ->
         Splice.cof phi0 @@ fun phi ->
+        Splice.tp (D.Univ lvl) @@ fun univ ->
         Splice.term @@
         TB.pi TB.tp_dim @@ fun i ->
         TB.pi (TB.tp_prf (TB.join [TB.eq i r; phi])) @@ fun _prf ->
-        TB.univ
+        univ
       in
       equate_con code_tp code0 code1
     in
     equate_cut cut0 cut1
-  | D.KVProj (r0, pcode0, code0, pequiv0), D.KVProj (r1, pcode1, code1, pequiv1) ->
-    let* () = equate_v_data (r0, pcode0, code0, pequiv0) (r1, pcode1, code1, pequiv1) in
+  | D.KVProj (lvl, r0, pcode0, code0, pequiv0), D.KVProj (_, r1, pcode1, code1, pequiv1) ->
+    let* () = equate_v_data lvl (r0, pcode0, code0, pequiv0) (r1, pcode1, code1, pequiv1) in
     equate_cut cut0 cut1
   | D.KLockedPrfUnlock (tp0, phi0, bdy0), D.KLockedPrfUnlock (tp1, phi1, bdy1) ->
     let* () = equate_cut cut0 cut1 in
@@ -433,13 +454,13 @@ and equate_unstable_cut (cut0, ufrm0) (cut1, ufrm1) =
   | _ ->
     conv_err @@ HeadMismatch (D.UnstableCut (cut0, ufrm0), D.UnstableCut (cut1, ufrm1))
 
-and equate_v_data (r0, pcode0, code0, pequiv0) (r1, pcode1, code1, pequiv1) =
+and equate_v_data lvl (r0, pcode0, code0, pequiv0) (r1, pcode1, code1, pequiv1) =
   let* () = equate_dim r0 r1 in
   let* () =
-    let pcode_tp = D.Pi (D.TpPrf (Cof.eq r0 Dim.Dim0), `Anon, D.const_tp_clo D.Univ) in
+    let pcode_tp = D.Pi (D.TpPrf (Cof.eq r0 Dim.Dim0), `Anon, D.const_tp_clo @@ D.Univ lvl) in
     equate_con pcode_tp pcode0 pcode1
   in
-  let* () = equate_con D.Univ code0 code1 in
+  let* () = equate_con (D.Univ lvl) code0 code1 in
   let* pequiv_tp =
     lift_cmp @@
     Sem.splice_tp @@
@@ -448,7 +469,7 @@ and equate_v_data (r0, pcode0, code0, pequiv0) (r1, pcode1, code1, pequiv1) =
   equate_con pequiv_tp pequiv0 pequiv1
 
 and equate_hcom (code0, r0, s0, phi0, bdy0) (code1, r1, s1, phi1, bdy1) =
-  let* () = equate_con D.Univ code0 code1 in
+  let* () = equate_con (D.Univ ULvl.LvlTop) code0 code1 in
   let* () = equate_dim r0 r1 in
   let* () = equate_dim s0 s1 in
   let* () = equate_cof phi0 phi1 in

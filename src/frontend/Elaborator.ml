@@ -42,8 +42,9 @@ sig
   val ext : int -> T.Chk.tac -> T.Chk.tac -> T.Chk.tac -> tac
   val nat : tac
   val circle : tac
-  val univ : tac
+  val univ : T.Chk.tac -> tac
   val dim : tac
+  val lvl : tac
   val cof : tac
   val prf : T.Chk.tac -> tac
   val locked_prf : T.Chk.tac -> tac
@@ -78,7 +79,7 @@ struct
     | _ ->
       let tac_base = as_tp tac_base in
       let tac_fam = as_tp tac_fam in
-      let tac = R.Pi.formation tac_base (ident, fun _ -> tac_fam) in
+      let tac = R.Pi.formation tac_base ident @@ fun _ -> tac_fam in
       Tp tac
 
   let sg (tac_base : tac) (ident : Ident.t) (tac_fam : tac) : tac =
@@ -89,7 +90,7 @@ struct
     | _ ->
       let tac_base = as_tp tac_base in
       let tac_fam = as_tp tac_fam in
-      let tac = R.Sg.formation tac_base (ident, fun _ -> tac_fam) in
+      let tac = R.Sg.formation tac_base ident @@ fun _ -> tac_fam in
       Tp tac
 
   let sub tac_tp tac_phi tac_pel : tac =
@@ -102,8 +103,9 @@ struct
 
   let nat = Code R.Univ.nat
   let circle = Code R.Univ.circle
-  let univ = Code R.Univ.univ
+  let univ tac_lvl = Code (R.Univ.univ tac_lvl)
   let dim = Tp R.Dim.formation
+  let lvl = Tp R.Lvl.formation
   let cof = Tp R.Cof.formation
   let prf tac = Tp (R.Prf.formation tac)
   let locked_prf tac = Tp (R.LockedPrf.formation tac)
@@ -124,6 +126,7 @@ let rec cool_chk_tp : CS.con -> CoolTp.tac =
   | CS.Sg (CS.Cell cell :: cells, body) ->
     CoolTp.sg (cool_chk_tp cell.tp) cell.name @@
     cool_chk_tp {con with node = CS.Sg (cells, body)}
+  | CS.Lvl -> CoolTp.lvl
   | CS.Dim -> CoolTp.dim
   | CS.Cof -> CoolTp.cof
   | CS.Prf phi -> CoolTp.prf @@ chk_tm phi
@@ -242,18 +245,18 @@ and chk_tm : CS.con -> T.Chk.tac =
     | CS.Circle ->
       R.Univ.circle
 
-    | CS.Type ->
-      R.Univ.univ
+    | CS.Type c ->
+      R.Univ.univ @@ chk_tm c
 
     | CS.Pi (cells, body) ->
       let tac (CS.Cell cell) = cell.name, chk_tm cell.tp in
       let tacs = cells |> List.map tac in
-      let quant base (nm, fam) = R.Univ.pi base (R.Pi.intro ~ident:nm fam) in
+      let quant base nm fam = R.Univ.pi base (R.Pi.intro ~ident:nm fam) in
       Tactics.tac_nary_quantifier quant tacs @@ chk_tm body
 
     | CS.Sg (cells, body) ->
       let tacs = cells |> List.map @@ fun (CS.Cell cell) -> cell.name, chk_tm cell.tp in
-      let quant base (nm, fam) = R.Univ.sg base (R.Pi.intro ~ident:nm fam) in
+      let quant base nm fam = R.Univ.sg base (R.Pi.intro ~ident:nm fam) in
       Tactics.tac_nary_quantifier quant tacs @@ chk_tm body
 
     | CS.V (r, pcode, code, pequiv) ->
@@ -297,6 +300,8 @@ and chk_tm : CS.con -> T.Chk.tac =
         RM.ret @@ R.Pi.intro @@ fun _ -> chk_tm @@ CS.{node = CS.Ap (con, [CS.{node = DeBruijnLevel lvl; info = None}]); info = None}
       | D.Sg _ ->
         RM.ret @@ R.Sg.intro (chk_tm @@ CS.{node = CS.Fst con; info = None}) (chk_tm @@ CS.{node = CS.Snd con; info = None})
+      | D.Univ _ ->
+        RM.ret @@ R.Univ.lift @@ syn_tm con
       | _ ->
         RM.ret @@ T.Chk.syn @@ syn_tm con
 
@@ -337,7 +342,7 @@ and syn_tm : CS.con -> T.Syn.tac =
         (syn_tm scrut)
     | CS.Rec {mot; cases; scrut} ->
       let mot_tac = chk_tm mot in
-      R.Structural.let_syn (T.Syn.ann mot_tac R.Univ.formation) @@ fun tp ->
+      R.Structural.let_syn (T.Syn.ann mot_tac (R.Univ.formation R.Lvl.top)) @@ fun tp ->
       Tactics.Elim.elim
         (R.Pi.intro @@ fun _ -> T.Chk.syn @@ R.Sub.elim @@ T.Var.syn tp)
         (chk_cases cases)
@@ -362,7 +367,7 @@ and syn_tm : CS.con -> T.Syn.tac =
         R.Univ.hcom code_tac (chk_tm src) (T.Chk.syn @@ T.Var.syn i) (chk_tm cof) (chk_tm tm)
       in
       T.Syn.ann tac @@
-      R.Pi.formation R.Dim.formation (`Anon, fun _ -> R.El.formation code_tac)
+      R.Pi.formation R.Dim.formation `Anon @@ fun _ -> R.El.formation code_tac
     | CS.Com (fam, src, trg, cof, tm) ->
       R.Univ.com (chk_tm fam) (chk_tm src) (chk_tm trg) (chk_tm cof) (chk_tm tm)
     | _ ->
